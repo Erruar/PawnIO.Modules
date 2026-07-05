@@ -481,29 +481,6 @@ NTSTATUS:map_pm_table(table_base) {
     return STATUS_SUCCESS;
 }
 
-NTSTATUS:init_pm_table() {
-    new version;
-    new NTSTATUS:status = get_pm_table_version(version);
-    if (!NT_SUCCESS(status))
-        return status;
-    debug_print(''RyzenSMU: PM Table Version: %x\n'', version);
-
-    new table_base;
-    status = get_pm_table_base(table_base);
-    if (!NT_SUCCESS(status))
-        return status;
-    debug_print(''RyzenSMU: PM Table Base: %x\n'', table_base);
-
-    if (!g_table_va || g_table_base != table_base) {
-        status = map_pm_table(table_base);
-        if (!NT_SUCCESS(status))
-            return status;
-    }
-
-    g_table_version = version;
-    return STATUS_SUCCESS;
-}
-
 NTSTATUS:check_smu_register_range(cmd) {
     if (cmd < 0 || cmd > 0xFFFFFFFF) return STATUS_NOT_SUPPORTED;
 
@@ -534,9 +511,20 @@ NTSTATUS:check_smu_register_range(cmd) {
 /// @return An NTSTATUS
 /// @warning You should acquire the "\BaseNamedObjects\Access_PCI" mutant before calling this
 DEFINE_IOCTL_SIZED(ioctl_resolve_pm_table, 0, 2) {
-    new NTSTATUS:status = init_pm_table();
+    new version;
+    new NTSTATUS:status = get_pm_table_version(version);
     if (!NT_SUCCESS(status))
         return status;
+    debug_print(''RyzenSMU: PM Table Version: %x\n'', version);
+
+    new table_base;
+    status = get_pm_table_base(table_base);
+    if (!NT_SUCCESS(status))
+        return status;
+    debug_print(''RyzenSMU: PM Table Base: %x\n'', table_base);
+
+    g_table_version = version;
+    g_table_base = table_base;
 
     out[0] = g_table_version;
     out[1] = g_table_base;
@@ -566,8 +554,15 @@ DEFINE_IOCTL_SIZED(ioctl_update_pm_table, 0, 0) {
 DEFINE_IOCTL(ioctl_read_pm_table) {
     if (out_size < 1)
         return STATUS_BUFFER_TOO_SMALL;
-    if (!g_table_base || !g_table_va)
+
+    if (!g_table_base)
         return STATUS_DEVICE_NOT_READY;
+
+    if (!g_table_va) {
+        new NTSTATUS:map_status = map_pm_table(g_table_base);
+        if (!NT_SUCCESS(map_status))
+            return map_status;
+    }
 
     new read_count = min(out_size, g_table_size / 8);
     new NTSTATUS:status = STATUS_SUCCESS;
@@ -725,10 +720,6 @@ NTSTATUS:main() {
         return STATUS_NOT_SUPPORTED;
 
     g_code_name = code_name;
-
-    new NTSTATUS:map_status = init_pm_table();
-    if (!NT_SUCCESS(map_status))
-        return map_status;
 
     return STATUS_SUCCESS;
 }
