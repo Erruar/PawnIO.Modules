@@ -494,6 +494,8 @@ NTSTATUS:piix4_port_sel(port, &old_port) {
 /// @note Ports 3 and 4 are marked as reserved in the datasheet, use at your own risk
 DEFINE_IOCTL_SIZED(ioctl_piix4_port_sel, 1, 1) {
     new new_port = in[0];
+    if (new_port < -1 || new_port > 4)
+        return STATUS_INVALID_PARAMETER;
     new old_port = -1;
 
     new NTSTATUS:status = piix4_port_sel(new_port, old_port);
