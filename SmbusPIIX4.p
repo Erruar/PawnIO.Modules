@@ -571,7 +571,8 @@ DEFINE_IOCTL_SIZED(ioctl_clock_freq, 1, 1) {
     }
 
     // From datasheet: 'Frequency = 66Mhz/(SmBusTiming * 4)'
-    out[0] = (66 * 1000000) / (io_in_byte(SMBTIMING) * 4);
+    new cur_timing = io_in_byte(SMBTIMING);
+    out[0] = cur_timing != 0 ? (66 * 1000000) / (cur_timing * 4) : 0;
 
     if (new_timing != -1) {
         // Set the new timing value
