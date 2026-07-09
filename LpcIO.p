@@ -75,6 +75,9 @@ check_and_add_bar(val, val_v) {
         if (g_bars_count > 1 && g_bars[g_bars_count - 2] == val)
             return;
 
+        if (g_bars_count >= sizeof g_bars)
+            return;
+
         g_bars[g_bars_count] = val;
         g_bars_count++;
         debug_print(''LpcIO: Added %X as BAR\n'', val);
