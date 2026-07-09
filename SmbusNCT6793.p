@@ -311,7 +311,7 @@ NTSTATUS:nct6793_access(addr, read_write, command, size, in[5], out[5])
             /* Load more bytes into FIFO */
             if(len >= 4)
             {
-                for(i = cnt; i <= (cnt + 4); i++)
+                for(i = cnt; i < (cnt + 4); i++)
                 {
                     io_out_byte(SMBHSTDAT, GET_BYTE_LE(in, i));
                 }
@@ -321,7 +321,7 @@ NTSTATUS:nct6793_access(addr, read_write, command, size, in[5], out[5])
             }
             else
             {
-                for(i = cnt; i <= (cnt + len); i++)
+                for(i = cnt; i < (cnt + len); i++)
                 {
                     io_out_byte(SMBHSTDAT, GET_BYTE_LE(in, i));
                 }
