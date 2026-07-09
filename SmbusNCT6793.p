@@ -427,8 +427,7 @@ DEFINE_IOCTL_SIZED(ioctl_clock_freq, 1, 1) {
 /// SMBus transfer.
 ///
 /// Performs a transfer of data over the SMBus using the specified command.
-/// I2C_SMBUS_QUICK (protocol 0) only requires the address and read/write parameters, command must be left as 0.
-/// I2C_SMBUS_BYTE (1), I2C_SMBUS_BYTE_DATA (2), and I2C_SMBUS_WORD_DATA (3) require the address, read/write, command, and data[0] (write only) parameters.
+/// I2C_SMBUS_BYTE_DATA (2) and I2C_SMBUS_WORD_DATA (3) require the address, read/write, command, and data[0] (write only) parameters.
 /// I2C_SMBUS_BLOCK_DATA (5) requires the address, read/write, command, data as length, and array data parameters.
 ///
 /// @param in [0] = Address, [1] = Read(1)/Write(0), [2] = Command, [3] = Protocol, [4] Data, [5..9] = Array Data (byte packed)
