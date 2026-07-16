@@ -21,7 +21,9 @@
 
 const CodeName: {
     CPU_Undefined = -1,
+    CPU_Carrizo,
     CPU_BristolRidge,
+    CPU_StoneyRidge,
     CPU_Colfax,
     CPU_Renoir,
     CPU_Picasso,
@@ -90,8 +92,12 @@ NTSTATUS:smu_status_to_nt(SMUStatus:s) {
 
 CodeName:get_code_name(family, model, pkg_type) {
     switch ((family << 8) | model) {
+        case 0x1560:
+            return CPU_Carrizo;
         case 0x1565:
             return CPU_BristolRidge;
+        case 0x1570:
+            return CPU_StoneyRidge;
         case 0x1701:
         {
             if (pkg_type == 3) { // socket SP3
@@ -173,6 +179,16 @@ CodeName:get_code_name(family, model, pkg_type) {
     return CPU_Undefined;
 }
 
+bool:is_carrizo_family(codename) {
+    switch (codename) {
+        case CPU_Carrizo, CPU_BristolRidge, CPU_StoneyRidge:
+            return true;
+        default:
+            return false;
+    }
+    return false;
+}
+
 #define ADDRINFO[.cmd, .rsp, .args]
 
 new const k_addrinfo[][ADDRINFO] = [
@@ -180,11 +196,13 @@ new const k_addrinfo[][ADDRINFO] = [
     [ 0x3B1051C,  0x3B10568,  0x3B10590  ],
     [ 0x3B10A20,  0x3B10A80,  0x3B10A88  ],
     [ 0x3B10924,  0x3B10970,  0x3B10A40  ],
-    [ 0x13000000, 0x13000010, 0x13000020 ],
+    [ 0xFEA00724, 0xFEA00764, 0xFEA007A4 ],
 ];
 
 new const k_addridx[] = [
+    /* Carrizo       = */  4,
     /* BristolRidge  = */  4,
+    /* StoneyRidge   = */  4,
     /* Colfax        = */  1,
     /* Renoir        = */  2,
     /* Picasso       = */  2,
@@ -232,11 +250,15 @@ const SMU_REQ_MAX_ARGS = 6;
 const SMU_RETRIES_MAX = 8096;
 
 NTSTATUS:read_reg(addr, &data) {
-    if ((addr & 0xFFFFF000) == 0xFEA00000){
+    new NTSTATUS:status = STATUS_SUCCESS;
+    if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
         // Read Mmio
+        status = virtual_read_dword(g_smu_mmio_va + (addr & 0xFFF), data);
+        if (!NT_SUCCESS(status))
+            return status;
     }
 
-    new NTSTATUS:status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
+    status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
     if (NT_SUCCESS(status)) {
         status = pci_config_read_dword(0, 0, 0, SMU_PCI_DATA_REG, data);
     }
@@ -244,15 +266,43 @@ NTSTATUS:read_reg(addr, &data) {
 }
 
 NTSTATUS:write_reg(addr, data) {
-    if ((addr & 0xFFFFF000) == 0xFEA00000){
+    new NTSTATUS:status = STATUS_SUCCESS;
+    if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
         // Write Mmio
+        status = virtual_write_dword(g_smu_mmio_va + (addr & 0xFFF), data);
+        if (!NT_SUCCESS(status))
+            return status;
     }
 
-    new NTSTATUS:status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
+    status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
     if (NT_SUCCESS(status)) {
         status = pci_config_write_dword(0, 0, 0, SMU_PCI_DATA_REG, data);
     }
     return status;
+}
+
+const SMU_SRBM_XGMI_ACCESS = 0xFEA00000;
+const SMU_SRBM_XGMI_PORT_IND = 0xFEA00608;
+const SMU_SRBM_XGMI_PORT_DATA = 0xFEA0060C;
+const SMN_MP1_SRAM_START_ADDR = 0x10000000;
+const SMU8_FIRMWARE_HEADER_LOCATION = 0x1FF80;
+const SMU_AGMTABLE_MAX_SIZE = 670;
+new VA:g_smu_mmio_va = NULL;
+
+unmap_smu_mmio() {
+    if (g_smu_mmio_va) {
+        io_space_unmap(g_smu_mmio_va, PAGE_SIZE);
+        g_smu_mmio_va = NULL;
+    }
+}
+
+NTSTATUS:map_smu_mmio() {
+    new VA:smu_mmio_va = io_space_map(SMU_SRBM_XGMI_ACCESS, PAGE_SIZE);
+    if (!smu_mmio_va)
+        return STATUS_COMMITMENT_LIMIT;
+
+    g_smu_mmio_va = smu_mmio_va;
+    return STATUS_SUCCESS;
 }
 
 new CodeName:g_code_name = CPU_Undefined;
@@ -352,6 +402,8 @@ NTSTATUS:get_pm_table_version(&version) {
         case CPU_Raphael, CPU_Genoa, CPU_StormPeak, CPU_DragonRange, CPU_GraniteRidge, CPU_Bergamo, 
              CPU_Turin, CPU_TurinD, CPU_ShimadaPeak:
             return send_command2(0x05, version);
+        case CPU_Carrizo, CPU_BristolRidge, CPU_StoneyRidge: 
+            return send_command2(0x40, version);
         default:
             return STATUS_NOT_SUPPORTED;
     }
@@ -374,6 +426,10 @@ NTSTATUS:transfer_table_to_dram() {
             return send_command2(0x65, three);
         case CPU_Dali, CPU_Picasso, CPU_RavenRidge, CPU_RavenRidge2, CPU_FireFlight:
             return send_command2(0x3d, three);
+        case CPU_Carrizo, CPU_BristolRidge, CPU_StoneyRidge: {
+            send_command2(0x2d);
+            return send_command2(0x2c, 1);
+        }
         default:
             return STATUS_NOT_SUPPORTED;
     }
@@ -411,6 +467,11 @@ NTSTATUS:get_pm_table_base(&base) {
             fn[1] = 0x3d;
             fn[2] = 0x0b;
             class = 3;
+        }
+        case CPU_Carrizo, CPU_BristolRidge, CPU_StoneyRidge: {
+            fn[0] = 0x2d;
+            fn[1] = 0x2c;
+            class = 4;
         }
         default:
             return STATUS_NOT_SUPPORTED;
@@ -459,6 +520,20 @@ NTSTATUS:get_pm_table_base(&base) {
             base = args[0];
             return STATUS_SUCCESS;
         }
+        case 4: {
+            args[0] = 0;
+            status = send_command(fn[0], args);
+            if (!NT_SUCCESS(status))
+                return status;
+
+            args[0] = 1;
+            status = send_command(fn[1], args);
+            if (!NT_SUCCESS(status))
+                return status;
+
+            base = args[0] | SMN_MP1_SRAM_START_ADDR;
+            return STATUS_SUCCESS;
+        }
         default:
             return STATUS_NOT_SUPPORTED;
     }
@@ -498,7 +573,7 @@ NTSTATUS:check_smu_register_range(cmd) {
     if ((cmd & 0xFFFFF000) == 0x3B10000) return STATUS_SUCCESS;
 
     // 2. 0x130000*0 (0x13000000 - 0x130000F0) SMU Mailboxes on Pre-Ryzen
-    if (cmd >= 0x13000000 && cmd <= 0x130000F0 && g_code_name == CPU_BristolRidge) return STATUS_SUCCESS;
+    if (cmd >= 0x13000000 && cmd <= 0x130000F0 && is_carrizo_family(g_code_name)) return STATUS_SUCCESS;
 
     // 3. 0x56***-0x5A*** (0x56000 – 0x5AFFF) SMU SVI2 Planes
     if (cmd >= 0x56000 && cmd <= 0x5AFFF) return STATUS_SUCCESS;
@@ -507,7 +582,7 @@ NTSTATUS:check_smu_register_range(cmd) {
     if ((cmd & 0xFFFFF000) == 0x6F000) return STATUS_SUCCESS;
 
     // 5. 0xFEA00*** (0xFEA00000 – 0xFEA00FFF) SMU Mmio Mailboxes on Pre-Ryzen
-    if ((cmd & 0xFFFFF000) == 0xFEA00000 && g_code_name == CPU_BristolRidge) return STATUS_SUCCESS;
+    if ((cmd & 0xFFFFF000) == 0xFEA00000 && is_carrizo_family(g_code_name)) return STATUS_SUCCESS;
 
     // If not in expected range
     return STATUS_NOT_SUPPORTED;
@@ -534,8 +609,8 @@ DEFINE_IOCTL_SIZED(ioctl_resolve_pm_table, 0, 2) {
         return status;
     debug_print(''RyzenSMU: PM Table Base: %x\n'', table_base);
 
-    if (g_table_base != table_base)
-        unmap_pm_table();
+    if (g_table_base != table_base && !is_carrizo_family(g_code_name))
+        unmap_pm_table(); // No need to map anything on Carrizo family
 
     g_table_base = table_base;
 
@@ -565,11 +640,33 @@ DEFINE_IOCTL_SIZED(ioctl_update_pm_table, 0, 0) {
 /// @param out_size How much of the table to read
 /// @return An NTSTATUS
 DEFINE_IOCTL(ioctl_read_pm_table) {
+    new NTSTATUS:status = STATUS_SUCCESS;
     if (out_size < 1)
         return STATUS_BUFFER_TOO_SMALL;
 
     if (!g_table_base)
         return STATUS_DEVICE_NOT_READY;
+
+      if (is_carrizo_family(g_code_name)) {
+        new read_count = min(out_size, SMU_AGMTABLE_MAX_SIZE);
+
+        for (new i = 0; i < read_count; ++i) {
+            // Write index: g_table_base + i to index register FEA00608
+            status = write_reg(SMU_SRBM_XGMI_PORT_IND, g_table_base + i);
+            if (!NT_SUCCESS(status))
+                break;
+
+            // Read data from data register FEA0060C
+            new data;
+            status = read_reg(SMU_SRBM_XGMI_PORT_DATA, data);
+            if (!NT_SUCCESS(status))
+                break;
+
+            out[i] = data;
+        }
+
+        return status;
+    }
 
     if (!g_table_va) {
         new NTSTATUS:map_status = map_pm_table(g_table_base);
@@ -578,7 +675,6 @@ DEFINE_IOCTL(ioctl_read_pm_table) {
     }
 
     new read_count = min(out_size, PAGE_SIZE / 8);
-    new NTSTATUS:status = STATUS_SUCCESS;
     new read;
     for (new i = 0; i < read_count; ++i) {
         status = virtual_read_qword(g_table_va + i * 8, read);
@@ -611,13 +707,14 @@ DEFINE_IOCTL_SIZED(ioctl_get_code_name, 0, 1) {
 /// @return An NTSTATUS
 /// @warning You should acquire the "\BaseNamedObjects\Access_PCI" mutant before calling this
 DEFINE_IOCTL_SIZED(ioctl_get_smu_version, 0, 1) {
-    if (g_code_name == CPU_BristolRidge) {
+    new NTSTATUS:status = STATUS_SUCCESS;
+    if (is_carrizo_family(g_code_name)) {
         new data;
 
         // Cmd 0x2 was introduced with first Ryzens, 
         // before that smu ver was stored in smu fw header
 
-        status = read_reg(0x1001FF80, data);
+        status = read_reg(SMN_MP1_SRAM_START_ADDR + SMU8_FIRMWARE_HEADER_LOCATION, data);
         if (!NT_SUCCESS(status))
             return status;
 
@@ -627,7 +724,7 @@ DEFINE_IOCTL_SIZED(ioctl_get_smu_version, 0, 1) {
 
     new args[6];
     args[0] = 1;
-    new NTSTATUS:status = send_command(0x02, args);
+    status = send_command(0x02, args);
     if (!NT_SUCCESS(status))
         return status;
 
@@ -729,8 +826,15 @@ NTSTATUS:main() {
         return STATUS_NOT_SUPPORTED;
 
     new CodeName:code_name = get_code_name(family, model, pkg_type);
-    if (code_name == CPU_Undefined)
+    new is_carrizo = is_carrizo_family(code_name);
+    if (code_name == CPU_Undefined || (!is_carrizo && family == 0x15))
         return STATUS_NOT_SUPPORTED;
+
+    if (is_carrizo) {
+        new NTSTATUS:map_status = map_smu_mmio();
+        if (!NT_SUCCESS(map_status))
+            return map_status;
+    }
 
     new didvid;
     new NTSTATUS:status = pci_config_read_dword(0, 0, 0, 0, didvid);
@@ -753,5 +857,6 @@ NTSTATUS:main() {
 
 public NTSTATUS:unload() {
     unmap_pm_table();
+    unmap_smu_mmio();
     return STATUS_SUCCESS;
 }
