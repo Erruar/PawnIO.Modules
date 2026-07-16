@@ -21,6 +21,7 @@
 
 const CodeName: {
     CPU_Undefined = -1,
+    CPU_BristolRidge,
     CPU_Colfax,
     CPU_Renoir,
     CPU_Picasso,
@@ -89,6 +90,8 @@ NTSTATUS:smu_status_to_nt(SMUStatus:s) {
 
 CodeName:get_code_name(family, model, pkg_type) {
     switch ((family << 8) | model) {
+        case 0x1565:
+            return CPU_BristolRidge;
         case 0x1701:
         {
             if (pkg_type == 3) { // socket SP3
@@ -173,13 +176,15 @@ CodeName:get_code_name(family, model, pkg_type) {
 #define ADDRINFO[.cmd, .rsp, .args]
 
 new const k_addrinfo[][ADDRINFO] = [
-    [ 0x3B10524, 0x3B10570, 0x3B10A40 ],
-    [ 0x3B1051C, 0x3B10568, 0x3B10590 ],
-    [ 0x3B10A20, 0x3B10A80, 0x3B10A88 ],
-    [ 0x3B10924, 0x3B10970, 0x3B10A40 ],
+    [ 0x3B10524,  0x3B10570,  0x3B10A40  ],
+    [ 0x3B1051C,  0x3B10568,  0x3B10590  ],
+    [ 0x3B10A20,  0x3B10A80,  0x3B10A88  ],
+    [ 0x3B10924,  0x3B10970,  0x3B10A40  ],
+    [ 0x13000000, 0x13000010, 0x13000020 ],
 ];
 
 new const k_addridx[] = [
+    /* BristolRidge  = */  4,
     /* Colfax        = */  1,
     /* Renoir        = */  2,
     /* Picasso       = */  2,
@@ -227,6 +232,10 @@ const SMU_REQ_MAX_ARGS = 6;
 const SMU_RETRIES_MAX = 8096;
 
 NTSTATUS:read_reg(addr, &data) {
+    if ((addr & 0xFFFFF000) == 0xFEA00000){
+        // Read Mmio
+    }
+
     new NTSTATUS:status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
     if (NT_SUCCESS(status)) {
         status = pci_config_read_dword(0, 0, 0, SMU_PCI_DATA_REG, data);
@@ -235,6 +244,10 @@ NTSTATUS:read_reg(addr, &data) {
 }
 
 NTSTATUS:write_reg(addr, data) {
+    if ((addr & 0xFFFFF000) == 0xFEA00000){
+        // Write Mmio
+    }
+
     new NTSTATUS:status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
     if (NT_SUCCESS(status)) {
         status = pci_config_write_dword(0, 0, 0, SMU_PCI_DATA_REG, data);
@@ -485,13 +498,16 @@ NTSTATUS:check_smu_register_range(cmd) {
     if ((cmd & 0xFFFFF000) == 0x3B10000) return STATUS_SUCCESS;
 
     // 2. 0x130000*0 (0x13000000 - 0x130000F0) SMU Mailboxes on Pre-Ryzen
-    if (cmd >= 0x13000000 && cmd <= 0x130000F0) return STATUS_SUCCESS;
+    if (cmd >= 0x13000000 && cmd <= 0x130000F0 && g_code_name == CPU_BristolRidge) return STATUS_SUCCESS;
 
     // 3. 0x56***-0x5A*** (0x56000 – 0x5AFFF) SMU SVI2 Planes
     if (cmd >= 0x56000 && cmd <= 0x5AFFF) return STATUS_SUCCESS;
 
     // 4. 0x6F*** (0x6F000 – 0x6FFFF) SMU Extended SVI2 Planes
     if ((cmd & 0xFFFFF000) == 0x6F000) return STATUS_SUCCESS;
+
+    // 5. 0xFEA00*** (0xFEA00000 – 0xFEA00FFF) SMU Mmio Mailboxes on Pre-Ryzen
+    if ((cmd & 0xFFFFF000) == 0xFEA00000 && g_code_name == CPU_BristolRidge) return STATUS_SUCCESS;
 
     // If not in expected range
     return STATUS_NOT_SUPPORTED;
@@ -595,6 +611,20 @@ DEFINE_IOCTL_SIZED(ioctl_get_code_name, 0, 1) {
 /// @return An NTSTATUS
 /// @warning You should acquire the "\BaseNamedObjects\Access_PCI" mutant before calling this
 DEFINE_IOCTL_SIZED(ioctl_get_smu_version, 0, 1) {
+    if (g_code_name == CPU_BristolRidge) {
+        new data;
+
+        // Cmd 0x2 was introduced with first Ryzens, 
+        // before that smu ver was stored in smu fw header
+
+        status = read_reg(0x1001FF80, data);
+        if (!NT_SUCCESS(status))
+            return status;
+
+        out[0] = data;
+        return STATUS_SUCCESS;
+    }
+
     new args[6];
     args[0] = 1;
     new NTSTATUS:status = send_command(0x02, args);
@@ -695,7 +725,7 @@ NTSTATUS:main() {
 
     debug_print(''RyzenSMU: family: %x model: %x pkg_type: %x\n'', family, model, pkg_type);
 
-    if (family != 0x17 && family != 0x19 && family != 0x1A)
+    if (family != 0x15 && family != 0x17 && family != 0x19 && family != 0x1A)
         return STATUS_NOT_SUPPORTED;
 
     new CodeName:code_name = get_code_name(family, model, pkg_type);
@@ -710,7 +740,7 @@ NTSTATUS:main() {
     debug_print(''RyzenSMU: code_name: %x vid: %x did: %x\n'', _:code_name, didvid & 0xFFFF, (didvid >>> 16) & 0xFFFF);
 
     // sanity check that it's something AMD
-    if ((didvid & 0xFFFF) != 0x1022)
+    if ((didvid & 0xFFFF) != 0x1022 && (didvid & 0xFFFF) != 0x1002)
         return STATUS_NOT_SUPPORTED;
 
     if (k_addridx[code_name] == -1)
