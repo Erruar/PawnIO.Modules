@@ -246,6 +246,8 @@ new const k_addridx[] = [
 
 const SMU_PCI_ADDR_REG = 0xC4;
 const SMU_PCI_DATA_REG = 0xC8;
+const SMU_PCI_CZ_ADDR_REG = 0xB8;
+const SMU_PCI_CZ_DATA_REG = 0xBC;
 const SMU_REQ_MAX_ARGS = 6;
 const SMU_RETRIES_MAX = 8096;
 
@@ -258,9 +260,10 @@ NTSTATUS:read_reg(addr, &data) {
             return status;
     }
 
-    status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
+    new is_carrizo = is_carrizo_family(g_code_name);
+    status = pci_config_write_dword(0, 0, 0, is_carrizo ? SMU_PCI_CZ_ADDR_REG : SMU_PCI_ADDR_REG, addr);
     if (NT_SUCCESS(status)) {
-        status = pci_config_read_dword(0, 0, 0, SMU_PCI_DATA_REG, data);
+        status = pci_config_read_dword(0, 0, 0, is_carrizo ? SMU_PCI_CZ_DATA_REG : SMU_PCI_DATA_REG, data);
     }
     return status;
 }
@@ -274,9 +277,10 @@ NTSTATUS:write_reg(addr, data) {
             return status;
     }
 
-    status = pci_config_write_dword(0, 0, 0, SMU_PCI_ADDR_REG, addr);
+    new is_carrizo = is_carrizo_family(g_code_name);
+    status = pci_config_write_dword(0, 0, 0, is_carrizo ? SMU_PCI_CZ_ADDR_REG : SMU_PCI_ADDR_REG, addr);
     if (NT_SUCCESS(status)) {
-        status = pci_config_write_dword(0, 0, 0, SMU_PCI_DATA_REG, data);
+        status = pci_config_write_dword(0, 0, 0, is_carrizo ? SMU_PCI_CZ_DATA_REG : SMU_PCI_DATA_REG, data);
     }
     return status;
 }
@@ -286,7 +290,7 @@ const SMU_SRBM_XGMI_PORT_IND = 0xFEA00608;
 const SMU_SRBM_XGMI_PORT_DATA = 0xFEA0060C;
 const SMN_MP1_SRAM_START_ADDR = 0x10000000;
 const SMU8_FIRMWARE_HEADER_LOCATION = 0x1FF80;
-const SMU_AGMTABLE_MAX_SIZE = 670;
+const SMU_AGMTABLE_MAX_SIZE = 369;
 new VA:g_smu_mmio_va = NULL;
 
 unmap_smu_mmio() {
