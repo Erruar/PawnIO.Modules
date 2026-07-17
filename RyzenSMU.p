@@ -256,7 +256,7 @@ const SMU_SRBM_XGMI_PORT_IND = 0xFEA00608;
 const SMU_SRBM_XGMI_PORT_DATA = 0xFEA0060C;
 const SMN_MP1_SRAM_START_ADDR = 0x10000000;
 const SMU8_FIRMWARE_HEADER_LOCATION = 0x1FF80;
-const SMU_AGMTABLE_MAX_SIZE = 369;
+const SMU_AGMTABLE_MAX_SIZE = 185; // 369 elements
 new VA:g_smu_mmio_va = NULL;
 
 new CodeName:g_code_name = CPU_Undefined;
@@ -266,8 +266,7 @@ NTSTATUS:read_reg(addr, &data) {
     if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
         // Read Mmio
         status = virtual_read_dword(g_smu_mmio_va + (addr & 0xFFF), data);
-        if (!NT_SUCCESS(status))
-            return status;
+        return status;
     }
 
     new is_carrizo = is_carrizo_family(g_code_name);
@@ -283,8 +282,7 @@ NTSTATUS:write_reg(addr, data) {
     if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
         // Write Mmio
         status = virtual_write_dword(g_smu_mmio_va + (addr & 0xFFF), data);
-        if (!NT_SUCCESS(status))
-            return status;
+        return status;
     }
 
     new is_carrizo = is_carrizo_family(g_code_name);
