@@ -652,21 +652,29 @@ DEFINE_IOCTL(ioctl_read_pm_table) {
         return STATUS_DEVICE_NOT_READY;
 
       if (is_carrizo_family(g_code_name)) {
-        new read_count = min(out_size, SMU_AGMTABLE_MAX_SIZE);
+        new read_count_cz = min(out_size, SMU_AGMTABLE_MAX_SIZE);
+        new data_low, data_high;
 
-        for (new i = 0; i < read_count; ++i) {
-            // Write index: g_table_base + i to index register FEA00608
-            status = write_reg(SMU_SRBM_XGMI_PORT_IND, g_table_base + i);
-            if (!NT_SUCCESS(status))
-                break;
+        for (new i = 0; i < read_count_cz; ++i) {
+            data_low = 0;
+            data_high = 0;
+            new idx_low = i * 2;
+            new idx_high = i * 2 + 1;
+            
+            // 1. Read first DWORD (lo 32 QWORD)
+            status = write_reg(SMU_SRBM_XGMI_PORT_IND, g_table_base + idx_low);
+            if (NT_SUCCESS(status)) {
+                status = read_reg(SMU_SRBM_XGMI_PORT_IND_DATA, data_low);
+            }
 
-            // Read data from data register FEA0060C
-            new data;
-            status = read_reg(SMU_SRBM_XGMI_PORT_DATA, data);
-            if (!NT_SUCCESS(status))
-                break;
+            // 2. Read second DWORD (hi 32 QWORD)
+            status = write_reg(SMU_SRBM_XGMI_PORT_IND, g_table_base + idx_high);
+            if (NT_SUCCESS(status)) {
+                status = read_reg(SMU_SRBM_XGMI_PORT_IND_DATA, data_high);
+            }
 
-            out[i] = data;
+            // 3. Pack DWORDs to QWORD cell
+            out[i] = (data_low & 0xFFFFFFFF) | ((data_high & 0xFFFFFFFF) << 32);
         }
 
         return status;
