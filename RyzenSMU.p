@@ -179,7 +179,7 @@ CodeName:get_code_name(family, model, pkg_type) {
     return CPU_Undefined;
 }
 
-bool:is_carrizo_family(codename) {
+bool:is_carrizo_family(CodeName:codename) {
     switch (codename) {
         case CPU_Carrizo, CPU_BristolRidge, CPU_StoneyRidge:
             return true;
@@ -251,6 +251,16 @@ const SMU_PCI_CZ_DATA_REG = 0xBC;
 const SMU_REQ_MAX_ARGS = 6;
 const SMU_RETRIES_MAX = 8096;
 
+const SMU_SRBM_XGMI_ACCESS = 0xFEA00000;
+const SMU_SRBM_XGMI_PORT_IND = 0xFEA00608;
+const SMU_SRBM_XGMI_PORT_DATA = 0xFEA0060C;
+const SMN_MP1_SRAM_START_ADDR = 0x10000000;
+const SMU8_FIRMWARE_HEADER_LOCATION = 0x1FF80;
+const SMU_AGMTABLE_MAX_SIZE = 369;
+new VA:g_smu_mmio_va = NULL;
+
+new CodeName:g_code_name = CPU_Undefined;
+
 NTSTATUS:read_reg(addr, &data) {
     new NTSTATUS:status = STATUS_SUCCESS;
     if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
@@ -285,14 +295,6 @@ NTSTATUS:write_reg(addr, data) {
     return status;
 }
 
-const SMU_SRBM_XGMI_ACCESS = 0xFEA00000;
-const SMU_SRBM_XGMI_PORT_IND = 0xFEA00608;
-const SMU_SRBM_XGMI_PORT_DATA = 0xFEA0060C;
-const SMN_MP1_SRAM_START_ADDR = 0x10000000;
-const SMU8_FIRMWARE_HEADER_LOCATION = 0x1FF80;
-const SMU_AGMTABLE_MAX_SIZE = 369;
-new VA:g_smu_mmio_va = NULL;
-
 unmap_smu_mmio() {
     if (g_smu_mmio_va) {
         io_space_unmap(g_smu_mmio_va, PAGE_SIZE);
@@ -308,8 +310,6 @@ NTSTATUS:map_smu_mmio() {
     g_smu_mmio_va = smu_mmio_va;
     return STATUS_SUCCESS;
 }
-
-new CodeName:g_code_name = CPU_Undefined;
 
 NTSTATUS:send_command(msg, args[SMU_REQ_MAX_ARGS]) {
     new addrinfo_idx = k_addridx[g_code_name];
@@ -415,6 +415,7 @@ NTSTATUS:get_pm_table_version(&version) {
 }
 
 NTSTATUS:transfer_table_to_dram() {
+    new one = 1;
     new three = 3;
     switch (g_code_name) {
         case CPU_SummitRidge, CPU_Naples, CPU_PinnacleRidge, CPU_Colfax, CPU_Threadripper:
@@ -432,7 +433,7 @@ NTSTATUS:transfer_table_to_dram() {
             return send_command2(0x3d, three);
         case CPU_Carrizo, CPU_BristolRidge, CPU_StoneyRidge: {
             send_command2(0x2d);
-            return send_command2(0x2c, 1);
+            return send_command2(0x2c, one);
         }
         default:
             return STATUS_NOT_SUPPORTED;
@@ -651,7 +652,7 @@ DEFINE_IOCTL(ioctl_read_pm_table) {
     if (!g_table_base)
         return STATUS_DEVICE_NOT_READY;
 
-      if (is_carrizo_family(g_code_name)) {
+    if (is_carrizo_family(g_code_name)) {
         new read_count_cz = min(out_size, SMU_AGMTABLE_MAX_SIZE);
         new data_low, data_high;
 
@@ -664,13 +665,13 @@ DEFINE_IOCTL(ioctl_read_pm_table) {
             // 1. Read first DWORD (lo 32 QWORD)
             status = write_reg(SMU_SRBM_XGMI_PORT_IND, g_table_base + idx_low);
             if (NT_SUCCESS(status)) {
-                status = read_reg(SMU_SRBM_XGMI_PORT_IND_DATA, data_low);
+                status = read_reg(SMU_SRBM_XGMI_PORT_DATA, data_low);
             }
 
             // 2. Read second DWORD (hi 32 QWORD)
             status = write_reg(SMU_SRBM_XGMI_PORT_IND, g_table_base + idx_high);
             if (NT_SUCCESS(status)) {
-                status = read_reg(SMU_SRBM_XGMI_PORT_IND_DATA, data_high);
+                status = read_reg(SMU_SRBM_XGMI_PORT_DATA, data_high);
             }
 
             // 3. Pack DWORDs to QWORD cell
