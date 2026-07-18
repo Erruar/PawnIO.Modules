@@ -196,7 +196,7 @@ new const k_addrinfo[][ADDRINFO] = [
     [ 0x3B1051C,  0x3B10568,  0x3B10590  ],
     [ 0x3B10A20,  0x3B10A80,  0x3B10A88  ],
     [ 0x3B10924,  0x3B10970,  0x3B10A40  ],
-    [ 0xFEA00724, 0xFEA00764, 0xFEA007A4 ],
+    [ 0xFFF00724, 0xFFF00764, 0xFFF007A4 ],
 ];
 
 new const k_addridx[] = [
@@ -251,19 +251,21 @@ const SMU_PCI_CZ_DATA_REG = 0xBC;
 const SMU_REQ_MAX_ARGS = 6;
 const SMU_RETRIES_MAX = 8096;
 
-const SMU_SRBM_XGMI_ACCESS = 0xFEA00000;
-const SMU_SRBM_XGMI_PORT_IND = 0xFEA00608;
-const SMU_SRBM_XGMI_PORT_DATA = 0xFEA0060C;
+const SMU_MMIO_SENTINEL = 0xFFF00000; // Marker to read/write MMIO Smu access instead of PCI
+const SMU_SRBM_XGMI_PORT_IND = 0xFFF00608;
+const SMU_SRBM_XGMI_PORT_DATA = 0xFFF0060C;
 const SMN_MP1_SRAM_START_ADDR = 0x10000000;
 const SMU8_FIRMWARE_HEADER_LOCATION = 0x1FF80;
 const SMU_AGMTABLE_MAX_SIZE = 185; // 369 elements
+
+new g_smu_xgmi_base = 0;
 new VA:g_smu_mmio_va = NULL;
 
 new CodeName:g_code_name = CPU_Undefined;
 
 NTSTATUS:read_reg(addr, &data) {
     new NTSTATUS:status = STATUS_SUCCESS;
-    if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
+    if ((addr & 0xFFFFF000) == SMU_MMIO_SENTINEL){
         // Read Mmio
         status = virtual_read_dword(g_smu_mmio_va + (addr & 0xFFF), data);
         return status;
@@ -279,7 +281,7 @@ NTSTATUS:read_reg(addr, &data) {
 
 NTSTATUS:write_reg(addr, data) {
     new NTSTATUS:status = STATUS_SUCCESS;
-    if ((addr & 0xFFFFF000) == SMU_SRBM_XGMI_ACCESS){
+    if ((addr & 0xFFFFF000) == SMU_MMIO_SENTINEL){
         // Write Mmio
         status = virtual_write_dword(g_smu_mmio_va + (addr & 0xFFF), data);
         return status;
@@ -301,11 +303,47 @@ unmap_smu_mmio() {
 }
 
 NTSTATUS:map_smu_mmio() {
-    new VA:smu_mmio_va = io_space_map(SMU_SRBM_XGMI_ACCESS, PAGE_SIZE);
+    if (!g_smu_xgmi_base)
+        return STATUS_DEVICE_NOT_READY;
+
+    new VA:smu_mmio_va = io_space_map(g_smu_xgmi_base, PAGE_SIZE);
     if (!smu_mmio_va)
         return STATUS_COMMITMENT_LIMIT;
 
     g_smu_mmio_va = smu_mmio_va;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS:locate_smu_xgmi_base(){
+    new gpu_didvid;
+    new bar5 = 0;
+    new found_gpu = false;
+
+    // Search for device on bus 0, dev 1, fun 0
+    pci_config_read_dword(0, 1, 0, 0, gpu_didvid);
+    if (((gpu_didvid >>> 16) & 0xFF0F) == 0x9804) {
+        pci_config_read_dword(0, 1, 0, 0x24, bar5);
+        found_gpu = true;
+    } else {
+        // Search for device on bus 1, dev 0, fun 0
+        pci_config_read_dword(1, 0, 0, 0, gpu_didvid);
+        if (((gpu_didvid >>> 16) & 0xFF0F) == 0x9804) {
+            pci_config_read_dword(1, 0, 0, 0x24, bar5);
+            found_gpu = true;
+        }
+    }
+
+    if (!found_gpu || bar5 == 0) {
+        debug_print(''RyzenSMU: Compatible iGPU not found or BAR5 is zero\n'');
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    g_smu_xgmi_base = bar5 & 0xFFFFFFF0;
+        
+    new NTSTATUS:map_status = map_smu_mmio();
+    if (!NT_SUCCESS(map_status))
+        return map_status;
+
     return STATUS_SUCCESS;
 }
 
@@ -584,8 +622,8 @@ NTSTATUS:check_smu_register_range(cmd) {
     // 4. 0x6F*** (0x6F000 – 0x6FFFF) SMU Extended SVI2 Planes
     if ((cmd & 0xFFFFF000) == 0x6F000) return STATUS_SUCCESS;
 
-    // 5. 0xFEA00*** (0xFEA00000 – 0xFEA00FFF) SMU Mmio Mailboxes on Pre-Ryzen
-    if ((cmd & 0xFFFFF000) == 0xFEA00000 && is_carrizo_family(g_code_name)) return STATUS_SUCCESS;
+    // 5. 0xxxx00*** (0xxxx00000 – 0xxxx00FFF) SMU Mmio Mailboxes on Pre-Ryzen, mapped with Mmio base
+    if ((cmd & 0xFFFFF000) == SMU_MMIO_SENTINEL && is_carrizo_family(g_code_name)) return STATUS_SUCCESS;
 
     // If not in expected range
     return STATUS_NOT_SUPPORTED;
@@ -842,7 +880,7 @@ NTSTATUS:main() {
         return STATUS_NOT_SUPPORTED;
 
     if (is_carrizo) {
-        new NTSTATUS:map_status = map_smu_mmio();
+        new NTSTATUS:map_status = locate_smu_xgmi_base();
         if (!NT_SUCCESS(map_status))
             return map_status;
     }
